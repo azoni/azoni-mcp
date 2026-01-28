@@ -1,6 +1,12 @@
 import express from 'express';
 import { initializeFirebase } from './firebase.js';
-import { getRecentWorkouts, getCoachSummary, getAthleteProgress } from './domains/benchpressonly/tools.js';
+import { 
+  getRecentWorkouts, 
+  getCoachSummary, 
+  getAthleteProgress,
+  getMaxLifts,
+  getGoals,
+} from './domains/benchpressonly/tools.js';
 
 initializeFirebase();
 
@@ -34,11 +40,20 @@ app.get('/tools', (req, res) => {
         endpoint: '/benchpressonly/coach/:username/athletes',
         description: 'Get progress of all athletes under a coach',
       },
+      {
+        name: 'get_max_lifts',
+        endpoint: '/benchpressonly/maxes/:username',
+        description: 'Get user\'s best lifts (estimated 1RMs)',
+      },
+      {
+        name: 'get_goals',
+        endpoint: '/benchpressonly/goals/:username',
+        description: 'Get user\'s fitness goals and progress',
+      },
     ],
   });
 });
 
-// First real tool!
 app.get('/benchpressonly/workouts/:username', async (req, res) => {
   try {
     const result = await getRecentWorkouts(req.params.username);
@@ -60,6 +75,25 @@ app.get('/benchpressonly/coach/:username', async (req, res) => {
 app.get('/benchpressonly/coach/:username/athletes', async (req, res) => {
   try {
     const result = await getAthleteProgress(req.params.username);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/benchpressonly/maxes/:username', async (req, res) => {
+  try {
+    const result = await getMaxLifts(req.params.username);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/benchpressonly/goals/:username', async (req, res) => {
+  try {
+    const includeCompleted = req.query.completed === 'true';
+    const result = await getGoals(req.params.username, includeCompleted);
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });

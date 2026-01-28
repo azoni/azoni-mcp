@@ -1,24 +1,32 @@
 import { getDb } from '../../firebase.js';
 
-export async function getRecentWorkouts(username, limit = 5) {
+// Helper: find user by username
+async function findUser(username) {
   const db = getDb();
-  
-  // First, find user by username
-  const usersSnapshot = await db.collection('users')
+  const snapshot = await db.collection('users')
     .where('username', '==', username.toLowerCase())
     .limit(1)
     .get();
   
-  if (usersSnapshot.empty) {
-    return { error: 'User not found' };
-  }
+  if (snapshot.empty) return null;
+  return { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
+}
+
+// Helper: calculate estimated 1RM
+function calculateE1RM(weight, reps) {
+  if (reps === 1) return weight;
+  if (reps > 12) return null;
+  return Math.round(weight * (36 / (37 - reps)));
+}
+
+export async function getRecentWorkouts(username, limit = 5) {
+  const db = getDb();
+  const user = await findUser(username);
   
-  const userId = usersSnapshot.docs[0].id;
-  const userData = usersSnapshot.docs[0].data();
+  if (!user) return { error: 'User not found' };
   
-  // Get their workouts
   const workoutsSnapshot = await db.collection('workouts')
-    .where('userId', '==', userId)
+    .where('userId', '==', user.id)
     .where('status', '==', 'completed')
     .orderBy('date', 'desc')
     .limit(limit)
@@ -37,7 +45,7 @@ export async function getRecentWorkouts(username, limit = 5) {
   });
   
   return {
-    user: userData.displayName,
+    user: user.displayName,
     workoutCount: workouts.length,
     workouts,
   };
@@ -45,28 +53,17 @@ export async function getRecentWorkouts(username, limit = 5) {
 
 export async function getCoachSummary(coachUsername) {
   const db = getDb();
+  const user = await findUser(coachUsername);
   
-  // Find coach by username
-  const usersSnapshot = await db.collection('users')
-    .where('username', '==', coachUsername.toLowerCase())
-    .limit(1)
-    .get();
+  if (!user) return { error: 'Coach not found' };
   
-  if (usersSnapshot.empty) {
-    return { error: 'Coach not found' };
-  }
-  
-  const coachId = usersSnapshot.docs[0].id;
-  const coachData = usersSnapshot.docs[0].data();
-  
-  // Find groups where this user is an admin (coach)
   const groupsSnapshot = await db.collection('groups')
-    .where('admins', 'array-contains', coachId)
+    .where('admins', 'array-contains', user.id)
     .get();
   
   if (groupsSnapshot.empty) {
     return { 
-      coach: coachData.displayName,
+      coach: user.displayName,
       message: 'Not currently coaching any groups'
     };
   }
@@ -76,7 +73,7 @@ export async function getCoachSummary(coachUsername) {
   
   for (const groupDoc of groupsSnapshot.docs) {
     const groupData = groupDoc.data();
-    const athletes = (groupData.members || []).filter(id => id !== coachId);
+    const athletes = (groupData.members || []).filter(id => id !== user.id);
     totalAthletes += athletes.length;
     
     groups.push({
@@ -86,8 +83,8 @@ export async function getCoachSummary(coachUsername) {
   }
   
   return {
-    coach: coachData.displayName,
-    username: coachData.username,
+    coach: user.displayName,
+    username: user.username,
     totalGroups: groups.length,
     totalAthletes,
     groups,
@@ -96,37 +93,24 @@ export async function getCoachSummary(coachUsername) {
 
 export async function getAthleteProgress(coachUsername) {
   const db = getDb();
+  const user = await findUser(coachUsername);
   
-  // Find coach
-  const usersSnapshot = await db.collection('users')
-    .where('username', '==', coachUsername.toLowerCase())
-    .limit(1)
-    .get();
+  if (!user) return { error: 'Coach not found' };
   
-  if (usersSnapshot.empty) {
-    return { error: 'Coach not found' };
-  }
-  
-  const coachId = usersSnapshot.docs[0].id;
-  const coachData = usersSnapshot.docs[0].data();
-  
-  // Find groups they coach
   const groupsSnapshot = await db.collection('groups')
-    .where('admins', 'array-contains', coachId)
+    .where('admins', 'array-contains', user.id)
     .get();
   
   const athleteProgress = [];
   
   for (const groupDoc of groupsSnapshot.docs) {
     const groupData = groupDoc.data();
-    const athleteIds = (groupData.members || []).filter(id => id !== coachId);
+    const athleteIds = (groupData.members || []).filter(id => id !== user.id);
     
     for (const athleteId of athleteIds) {
-      // Get athlete info
       const athleteDoc = await db.collection('users').doc(athleteId).get();
       const athleteData = athleteDoc.data() || {};
       
-      // Get their completed group workouts
       const workoutsSnapshot = await db.collection('groupWorkouts')
         .where('assignedTo', '==', athleteId)
         .where('groupId', '==', groupDoc.id)
@@ -146,7 +130,108 @@ export async function getAthleteProgress(coachUsername) {
   }
   
   return {
-    coach: coachData.displayName,
+    coach: user.displayName,
     athletes: athleteProgress,
+  };
+}
+
+export async function getMaxLifts(username) {
+  const db = getDb();
+  const user = await findUser(username);
+  
+  if (!user) return { error: 'User not found' };
+  
+  const maxes = {};
+  
+  // Helper to process workouts
+  function processWorkout(data) {
+    (data.exercises || []).forEach(ex => {
+      (ex.sets || []).forEach(set => {
+        const weight = parseFloat(set.actualWeight) || parseFloat(set.prescribedWeight) || 0;
+        const reps = parseInt(set.actualReps) || parseInt(set.prescribedReps) || 0;
+        
+        if (weight > 0 && reps > 0 && reps <= 12) {
+          const e1rm = Math.round(weight * (1 + reps / 30)); // Epley formula
+          
+          if (!maxes[ex.name] || e1rm > maxes[ex.name].estimated1RM) {
+            maxes[ex.name] = {
+              weight,
+              reps,
+              estimated1RM: e1rm,
+            };
+          }
+        }
+      });
+    });
+  }
+  
+  // Get personal workouts
+  const personalSnapshot = await db.collection('workouts')
+    .where('userId', '==', user.id)
+    .where('status', '==', 'completed')
+    .get();
+  
+  personalSnapshot.docs.forEach(doc => processWorkout(doc.data()));
+  
+  // Get group workouts
+  const groupSnapshot = await db.collection('groupWorkouts')
+    .where('assignedTo', '==', user.id)
+    .where('status', '==', 'completed')
+    .get();
+  
+  groupSnapshot.docs.forEach(doc => processWorkout(doc.data()));
+  
+  // Sort by estimated 1RM descending
+  const sortedMaxes = Object.entries(maxes)
+    .map(([exercise, data]) => ({ exercise, ...data }))
+    .sort((a, b) => (b.estimated1RM || 0) - (a.estimated1RM || 0));
+  
+  return {
+    user: user.displayName,
+    lifts: sortedMaxes,
+  };
+}
+
+export async function getGoals(username, includeCompleted = false) {
+  const db = getDb();
+  const user = await findUser(username);
+  
+  if (!user) return { error: 'User not found' };
+  
+  let query = db.collection('goals').where('userId', '==', user.id);
+  
+  if (!includeCompleted) {
+    query = query.where('status', '==', 'active');
+  }
+  
+  const snapshot = await query.get();
+  
+  const goals = snapshot.docs.map(doc => {
+    const data = doc.data();
+    const startVal = parseFloat(data.startValue) || parseFloat(data.startWeight) || 0;
+    const currentVal = parseFloat(data.currentValue) || parseFloat(data.currentWeight) || startVal;
+    const targetVal = parseFloat(data.targetValue) || parseFloat(data.targetWeight) || 0;
+    
+    let progress = 0;
+    if (targetVal > startVal) {
+      progress = Math.round(((currentVal - startVal) / (targetVal - startVal)) * 100);
+    }
+    
+    return {
+      lift: data.lift,
+      type: data.metricType || 'weight',
+      start: startVal,
+      current: currentVal,
+      target: targetVal,
+      progress: `${Math.min(100, Math.max(0, progress))}%`,
+      status: data.status,
+      targetDate: data.targetDate?.toDate?.().toISOString().split('T')[0] || null,
+    };
+  });
+  
+  return {
+    user: user.displayName,
+    activeGoals: goals.filter(g => g.status === 'active').length,
+    goals,
   };
 }
