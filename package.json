@@ -1,0 +1,16 @@
+{
+  "name": "azoni-mcp",
+  "version": "1.0.0",
+  "description": "Unified MCP server for Azoni's projects",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "express": "^4.18.2",
+    "firebase-admin": "^13.6.0"
+  }
+}
