@@ -12,12 +12,393 @@ async function findUser(username) {
   return { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
 }
 
-// Helper: calculate estimated 1RM
-function calculateE1RM(weight, reps) {
-  if (reps === 1) return weight;
-  if (reps > 12) return null;
-  return Math.round(weight * (36 / (37 - reps)));
+// ============ PROFILE & STATS ============
+
+export async function getUserProfile(username) {
+  const db = getDb();
+  const user = await findUser(username);
+  
+  if (!user) return { error: 'User not found' };
+  
+  // Get workout counts
+  const personalWorkouts = await db.collection('workouts')
+    .where('userId', '==', user.id)
+    .where('status', '==', 'completed')
+    .get();
+  
+  const groupWorkouts = await db.collection('groupWorkouts')
+    .where('assignedTo', '==', user.id)
+    .where('status', '==', 'completed')
+    .get();
+  
+  const totalWorkouts = personalWorkouts.size + groupWorkouts.size;
+  
+  // Get groups
+  const groups = await db.collection('groups')
+    .where('members', 'array-contains', user.id)
+    .get();
+  
+  const coachingGroups = await db.collection('groups')
+    .where('admins', 'array-contains', user.id)
+    .get();
+  
+  return {
+    displayName: user.displayName,
+    username: user.username,
+    memberSince: user.createdAt?.toDate?.().toISOString().split('T')[0] || null,
+    totalWorkouts,
+    groupsMember: groups.size,
+    groupsCoaching: coachingGroups.size,
+    isCoach: coachingGroups.size > 0,
+  };
 }
+
+export async function getBodyStats(username) {
+  const user = await findUser(username);
+  
+  if (!user) return { error: 'User not found' };
+  
+  const heightInches = user.heightFeet ? (user.heightFeet * 12) + (user.heightInches || 0) : null;
+  const heightCm = heightInches ? Math.round(heightInches * 2.54) : null;
+  
+  let bmi = null;
+  if (user.weight && heightInches) {
+    bmi = ((user.weight / (heightInches * heightInches)) * 703).toFixed(1);
+  }
+  
+  return {
+    user: user.displayName,
+    weight: user.weight ? `${user.weight} lbs` : null,
+    height: user.heightFeet ? `${user.heightFeet}'${user.heightInches || 0}"` : null,
+    heightCm: heightCm ? `${heightCm} cm` : null,
+    bmi,
+    age: user.age || null,
+    activityLevel: user.activityLevel || null,
+  };
+}
+
+// ============ STREAKS & CONSISTENCY ============
+
+export async function getStreak(username) {
+  const db = getDb();
+  const user = await findUser(username);
+  
+  if (!user) return { error: 'User not found' };
+  
+  // Get all completed workouts sorted by date
+  const personalSnapshot = await db.collection('workouts')
+    .where('userId', '==', user.id)
+    .where('status', '==', 'completed')
+    .orderBy('date', 'desc')
+    .get();
+  
+  const groupSnapshot = await db.collection('groupWorkouts')
+    .where('assignedTo', '==', user.id)
+    .where('status', '==', 'completed')
+    .orderBy('date', 'desc')
+    .get();
+  
+  // Combine and get unique dates
+  const allDates = new Set();
+  
+  personalSnapshot.docs.forEach(doc => {
+    const date = doc.data().date?.toDate?.();
+    if (date) allDates.add(date.toISOString().split('T')[0]);
+  });
+  
+  groupSnapshot.docs.forEach(doc => {
+    const date = doc.data().date?.toDate?.();
+    if (date) allDates.add(date.toISOString().split('T')[0]);
+  });
+  
+  const sortedDates = Array.from(allDates).sort().reverse();
+  
+  if (sortedDates.length === 0) {
+    return { user: user.displayName, currentStreak: 0, longestStreak: 0, totalDays: 0 };
+  }
+  
+  // Calculate current streak (consecutive days from today or yesterday)
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  
+  let currentStreak = 0;
+  let checkDate = new Date(sortedDates[0]);
+  
+  // Only count if last workout was today or yesterday
+  if (checkDate >= yesterday) {
+    currentStreak = 1;
+    for (let i = 1; i < sortedDates.length; i++) {
+      const prevDate = new Date(sortedDates[i]);
+      const diff = (checkDate - prevDate) / (1000 * 60 * 60 * 24);
+      if (diff <= 1) {
+        currentStreak++;
+        checkDate = prevDate;
+      } else {
+        break;
+      }
+    }
+  }
+  
+  // Calculate longest streak
+  let longestStreak = 1;
+  let tempStreak = 1;
+  
+  for (let i = 1; i < sortedDates.length; i++) {
+    const curr = new Date(sortedDates[i - 1]);
+    const prev = new Date(sortedDates[i]);
+    const diff = (curr - prev) / (1000 * 60 * 60 * 24);
+    
+    if (diff <= 1) {
+      tempStreak++;
+      longestStreak = Math.max(longestStreak, tempStreak);
+    } else {
+      tempStreak = 1;
+    }
+  }
+  
+  return {
+    user: user.displayName,
+    currentStreak,
+    longestStreak,
+    totalDays: sortedDates.length,
+    lastWorkout: sortedDates[0],
+  };
+}
+
+export async function getConsistency(username, periodDays = 90) {
+  const db = getDb();
+  const user = await findUser(username);
+  
+  if (!user) return { error: 'User not found' };
+  
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - periodDays);
+  
+  const personalSnapshot = await db.collection('workouts')
+    .where('userId', '==', user.id)
+    .where('status', '==', 'completed')
+    .where('date', '>=', startDate)
+    .get();
+  
+  const groupSnapshot = await db.collection('groupWorkouts')
+    .where('assignedTo', '==', user.id)
+    .where('status', '==', 'completed')
+    .where('date', '>=', startDate)
+    .get();
+  
+  const totalWorkouts = personalSnapshot.size + groupSnapshot.size;
+  const weeksInPeriod = periodDays / 7;
+  const workoutsPerWeek = (totalWorkouts / weeksInPeriod).toFixed(1);
+  
+  // Get unique days
+  const uniqueDays = new Set();
+  personalSnapshot.docs.forEach(doc => {
+    const date = doc.data().date?.toDate?.();
+    if (date) uniqueDays.add(date.toISOString().split('T')[0]);
+  });
+  groupSnapshot.docs.forEach(doc => {
+    const date = doc.data().date?.toDate?.();
+    if (date) uniqueDays.add(date.toISOString().split('T')[0]);
+  });
+  
+  return {
+    user: user.displayName,
+    period: `Last ${periodDays} days`,
+    totalWorkouts,
+    uniqueDays: uniqueDays.size,
+    workoutsPerWeek,
+    consistency: `${Math.round((uniqueDays.size / periodDays) * 100)}%`,
+  };
+}
+
+// ============ VOLUME & EXERCISES ============
+
+export async function getTrainingVolume(username, periodDays = 30) {
+  const db = getDb();
+  const user = await findUser(username);
+  
+  if (!user) return { error: 'User not found' };
+  
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - periodDays);
+  
+  let totalVolume = 0;
+  let totalSets = 0;
+  let totalReps = 0;
+  
+  function processWorkout(data) {
+    (data.exercises || []).forEach(ex => {
+      (ex.sets || []).forEach(set => {
+        const weight = parseFloat(set.actualWeight) || parseFloat(set.prescribedWeight) || 0;
+        const reps = parseInt(set.actualReps) || parseInt(set.prescribedReps) || 0;
+        
+        if (weight > 0 && reps > 0) {
+          totalVolume += weight * reps;
+          totalSets++;
+          totalReps += reps;
+        }
+      });
+    });
+  }
+  
+  const personalSnapshot = await db.collection('workouts')
+    .where('userId', '==', user.id)
+    .where('status', '==', 'completed')
+    .where('date', '>=', startDate)
+    .get();
+  
+  const groupSnapshot = await db.collection('groupWorkouts')
+    .where('assignedTo', '==', user.id)
+    .where('status', '==', 'completed')
+    .where('date', '>=', startDate)
+    .get();
+  
+  personalSnapshot.docs.forEach(doc => processWorkout(doc.data()));
+  groupSnapshot.docs.forEach(doc => processWorkout(doc.data()));
+  
+  return {
+    user: user.displayName,
+    period: `Last ${periodDays} days`,
+    totalVolume: `${totalVolume.toLocaleString()} lbs`,
+    totalSets,
+    totalReps,
+    avgVolumePerWorkout: personalSnapshot.size + groupSnapshot.size > 0 
+      ? `${Math.round(totalVolume / (personalSnapshot.size + groupSnapshot.size)).toLocaleString()} lbs`
+      : '0 lbs',
+  };
+}
+
+export async function getTopExercises(username, limit = 10) {
+  const db = getDb();
+  const user = await findUser(username);
+  
+  if (!user) return { error: 'User not found' };
+  
+  const exerciseCounts = {};
+  const exerciseVolume = {};
+  
+  function processWorkout(data) {
+    (data.exercises || []).forEach(ex => {
+      const name = ex.name;
+      exerciseCounts[name] = (exerciseCounts[name] || 0) + 1;
+      
+      (ex.sets || []).forEach(set => {
+        const weight = parseFloat(set.actualWeight) || parseFloat(set.prescribedWeight) || 0;
+        const reps = parseInt(set.actualReps) || parseInt(set.prescribedReps) || 0;
+        exerciseVolume[name] = (exerciseVolume[name] || 0) + (weight * reps);
+      });
+    });
+  }
+  
+  const personalSnapshot = await db.collection('workouts')
+    .where('userId', '==', user.id)
+    .where('status', '==', 'completed')
+    .get();
+  
+  const groupSnapshot = await db.collection('groupWorkouts')
+    .where('assignedTo', '==', user.id)
+    .where('status', '==', 'completed')
+    .get();
+  
+  personalSnapshot.docs.forEach(doc => processWorkout(doc.data()));
+  groupSnapshot.docs.forEach(doc => processWorkout(doc.data()));
+  
+  const byFrequency = Object.entries(exerciseCounts)
+    .map(([name, count]) => ({ name, sessions: count, totalVolume: exerciseVolume[name] || 0 }))
+    .sort((a, b) => b.sessions - a.sessions)
+    .slice(0, limit);
+  
+  return {
+    user: user.displayName,
+    totalExercises: Object.keys(exerciseCounts).length,
+    topByFrequency: byFrequency,
+  };
+}
+
+// ============ PR HISTORY ============
+
+export async function getPRHistory(username, exercise = null) {
+  const db = getDb();
+  const user = await findUser(username);
+  
+  if (!user) return { error: 'User not found' };
+  
+  const prHistory = {};
+  
+  function processWorkout(data, workoutDate) {
+    (data.exercises || []).forEach(ex => {
+      if (exercise && ex.name.toLowerCase() !== exercise.toLowerCase()) return;
+      
+      (ex.sets || []).forEach(set => {
+        const weight = parseFloat(set.actualWeight) || parseFloat(set.prescribedWeight) || 0;
+        const reps = parseInt(set.actualReps) || parseInt(set.prescribedReps) || 0;
+        
+        if (weight > 0 && reps > 0 && reps <= 12) {
+          const e1rm = Math.round(weight * (1 + reps / 30));
+          
+          if (!prHistory[ex.name]) {
+            prHistory[ex.name] = [];
+          }
+          
+          const existing = prHistory[ex.name];
+          const currentMax = existing.length > 0 ? Math.max(...existing.map(p => p.e1rm)) : 0;
+          
+          if (e1rm > currentMax) {
+            prHistory[ex.name].push({
+              date: workoutDate,
+              weight,
+              reps,
+              e1rm,
+            });
+          }
+        }
+      });
+    });
+  }
+  
+  const personalSnapshot = await db.collection('workouts')
+    .where('userId', '==', user.id)
+    .where('status', '==', 'completed')
+    .orderBy('date', 'asc')
+    .get();
+  
+  const groupSnapshot = await db.collection('groupWorkouts')
+    .where('assignedTo', '==', user.id)
+    .where('status', '==', 'completed')
+    .orderBy('date', 'asc')
+    .get();
+  
+  personalSnapshot.docs.forEach(doc => {
+    const data = doc.data();
+    const date = data.date?.toDate?.().toISOString().split('T')[0];
+    processWorkout(data, date);
+  });
+  
+  groupSnapshot.docs.forEach(doc => {
+    const data = doc.data();
+    const date = data.date?.toDate?.().toISOString().split('T')[0];
+    processWorkout(data, date);
+  });
+  
+  // Format output
+  const formatted = {};
+  Object.entries(prHistory).forEach(([name, prs]) => {
+    formatted[name] = {
+      currentPR: prs[prs.length - 1],
+      prCount: prs.length,
+      history: prs,
+    };
+  });
+  
+  return {
+    user: user.displayName,
+    exercises: formatted,
+  };
+}
+
+// ============ RECENT ACTIVITY ============
 
 export async function getRecentWorkouts(username, limit = 5) {
   const db = getDb();
@@ -50,6 +431,8 @@ export async function getRecentWorkouts(username, limit = 5) {
     workouts,
   };
 }
+
+// ============ COACHING ============
 
 export async function getCoachSummary(coachUsername) {
   const db = getDb();
@@ -135,6 +518,8 @@ export async function getAthleteProgress(coachUsername) {
   };
 }
 
+// ============ MAXES & GOALS ============
+
 export async function getMaxLifts(username) {
   const db = getDb();
   const user = await findUser(username);
@@ -143,7 +528,6 @@ export async function getMaxLifts(username) {
   
   const maxes = {};
   
-  // Helper to process workouts
   function processWorkout(data) {
     (data.exercises || []).forEach(ex => {
       (ex.sets || []).forEach(set => {
@@ -151,7 +535,7 @@ export async function getMaxLifts(username) {
         const reps = parseInt(set.actualReps) || parseInt(set.prescribedReps) || 0;
         
         if (weight > 0 && reps > 0 && reps <= 12) {
-          const e1rm = Math.round(weight * (1 + reps / 30)); // Epley formula
+          const e1rm = Math.round(weight * (1 + reps / 30));
           
           if (!maxes[ex.name] || e1rm > maxes[ex.name].estimated1RM) {
             maxes[ex.name] = {
@@ -165,7 +549,6 @@ export async function getMaxLifts(username) {
     });
   }
   
-  // Get personal workouts
   const personalSnapshot = await db.collection('workouts')
     .where('userId', '==', user.id)
     .where('status', '==', 'completed')
@@ -173,7 +556,6 @@ export async function getMaxLifts(username) {
   
   personalSnapshot.docs.forEach(doc => processWorkout(doc.data()));
   
-  // Get group workouts
   const groupSnapshot = await db.collection('groupWorkouts')
     .where('assignedTo', '==', user.id)
     .where('status', '==', 'completed')
@@ -181,7 +563,6 @@ export async function getMaxLifts(username) {
   
   groupSnapshot.docs.forEach(doc => processWorkout(doc.data()));
   
-  // Sort by estimated 1RM descending
   const sortedMaxes = Object.entries(maxes)
     .map(([exercise, data]) => ({ exercise, ...data }))
     .sort((a, b) => (b.estimated1RM || 0) - (a.estimated1RM || 0));
