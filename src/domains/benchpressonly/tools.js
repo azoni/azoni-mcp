@@ -616,3 +616,44 @@ export async function getGoals(username, includeCompleted = false) {
     goals,
   };
 }
+
+// ============ ACTIVITY STATS ============
+
+export async function getActivityStats(days = 7) {
+  const db = getDb();
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+
+  const snapshot = await db.collection('agent_activity')
+    .where('timestamp', '>=', cutoff)
+    .orderBy('timestamp', 'desc')
+    .get();
+
+  const dailyCounts = {};
+  let mostActiveSource = {};
+
+  snapshot.docs.forEach(doc => {
+    const data = doc.data();
+    const date = data.timestamp?.toDate?.();
+    if (!date) return;
+
+    const dayKey = date.toISOString().split('T')[0];
+    if (!dailyCounts[dayKey]) dailyCounts[dayKey] = 0;
+    dailyCounts[dayKey]++;
+
+    const source = data.source || 'unknown';
+    if (!mostActiveSource[source]) mostActiveSource[source] = 0;
+    mostActiveSource[source]++;
+  });
+
+  const topSource = Object.entries(mostActiveSource)
+    .sort((a, b) => b[1] - a[1])[0];
+
+  return {
+    period: `${days} days`,
+    totalEvents: snapshot.size,
+    avgPerDay: snapshot.size > 0 ? Math.round((snapshot.size / days) * 10) / 10 : 0,
+    mostActiveSource: topSource ? { source: topSource[0], events: topSource[1] } : null,
+    dailyBreakdown: dailyCounts,
+  };
+}

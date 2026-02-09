@@ -14,6 +14,11 @@ import {
   getMaxLifts,
   getGoals,
 } from './domains/benchpressonly/tools.js';
+import {
+  getRecentActivity,
+  getCostSummary,
+  getActivityStats,
+} from './domains/activity/tools.js';
 
 initializeFirebase();
 
@@ -38,6 +43,15 @@ const TOOLS = {
       { name: 'get_athlete_progress', endpoint: '/benchpressonly/coach/:username/athletes', description: 'Athlete progress and completion rates', params: ['username'] },
       { name: 'get_max_lifts', endpoint: '/benchpressonly/maxes/:username', description: 'Estimated 1RMs for all exercises', params: ['username'] },
       { name: 'get_goals', endpoint: '/benchpressonly/goals/:username', description: 'Fitness goals and progress', params: ['username'], query: ['completed'] },
+    ]
+  },
+  activity: {
+    name: 'AI Activity',
+    description: 'Cross-app AI activity feed and cost tracking',
+    tools: [
+      { name: 'get_recent_activity', endpoint: '/activity/recent', description: 'Recent AI activity across all apps', query: ['limit', 'source'] },
+      { name: 'get_cost_summary', endpoint: '/activity/costs', description: 'AI cost breakdown by source, model, and type', query: ['days'] },
+      { name: 'get_activity_stats', endpoint: '/activity/stats', description: 'Activity frequency and trends', query: ['days'] },
     ]
   }
 };
@@ -621,6 +635,39 @@ app.get('/benchpressonly/goals/:username', async (req, res) => {
   try {
     const includeCompleted = req.query.completed === 'true';
     const result = await getGoals(req.params.username, includeCompleted);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============ ACTIVITY ============
+
+app.get('/activity/recent', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 20;
+    const source = req.query.source || null;
+    const result = await getRecentActivity(Math.min(limit, 100), source);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/activity/costs', async (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 30;
+    const result = await getCostSummary(Math.min(days, 365));
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/activity/stats', async (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 7;
+    const result = await getActivityStats(Math.min(days, 90));
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
