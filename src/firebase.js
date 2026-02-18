@@ -1,5 +1,5 @@
 import { initializeApp, cert } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
+import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import 'dotenv/config';
 
 let db = null;
@@ -23,4 +23,8 @@ export function getDb() {
     throw new Error('Firebase not initialized');
   }
   return db;
+}
+
+export function serverTimestamp() {
+  return FieldValue.serverTimestamp();
 }

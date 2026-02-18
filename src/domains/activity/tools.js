@@ -1,4 +1,4 @@
-import { getDb } from '../../firebase.js';
+import { getDb, serverTimestamp } from '../../firebase.js';
 
 // ============ RECENT ACTIVITY ============
 
@@ -108,6 +108,29 @@ export async function getCostSummary(days = 30) {
         .map(([k, v]) => [k, { ...v, cost: `$${round(v.cost)}` }])
     ),
   };
+}
+
+// ============ LOG ACTIVITY (WRITE) ============
+
+export async function logActivity({ type, title, description, source, model, tokens, cost }) {
+  if (!type || !title || !source) {
+    throw new Error('Missing required fields: type, title, source');
+  }
+
+  const db = getDb();
+  const doc = {
+    type,
+    title,
+    source,
+    description: description || '',
+    model: model || null,
+    tokens: tokens || null,
+    cost: cost ?? null,
+    timestamp: serverTimestamp(),
+  };
+
+  const ref = await db.collection('agent_activity').add(doc);
+  return { id: ref.id, ...doc, timestamp: new Date().toISOString() };
 }
 
 // ============ ACTIVITY STATS ============
