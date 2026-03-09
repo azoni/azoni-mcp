@@ -27,6 +27,11 @@ import {
   getModels as getEmbedRouteModels, createEmbeddings,
 } from './domains/embedroute/tools.js';
 import { getStats as getRowCrewStats } from './domains/rowcrew/tools.js';
+import {
+  getCommunityStats as getFabStatsCommunity,
+  getLeaderboard as getFabStatsLeaderboard,
+  getMinigameStats as getFabStatsMinigame,
+} from './domains/fabstats/tools.js';
 
 initializeFirebase();
 
@@ -132,6 +137,15 @@ const TOOLS = {
     description: 'Rowing fitness tracker',
     tools: [
       { name: 'get_stats', method: 'GET', endpoint: '/rowcrew/stats', description: 'Rowing statistics summary' },
+    ]
+  },
+  fabstats: {
+    name: 'FaB Stats',
+    description: 'Flesh and Blood TCG stats tracker',
+    tools: [
+      { name: 'get_community_stats', method: 'GET', endpoint: '/fabstats/community', description: 'Community overview — players, matches, top heroes, win rate' },
+      { name: 'get_leaderboard', method: 'GET', endpoint: '/fabstats/leaderboard', description: 'Top players by matches, win rate, or ELO', query: ['sort', 'limit'] },
+      { name: 'get_minigame_stats', method: 'GET', endpoint: '/fabstats/minigame/:game', description: 'Top players for a specific daily minigame', params: ['game'] },
     ]
   },
 };
@@ -451,6 +465,23 @@ app.post('/embedroute/embeddings', async (req, res) => {
 
 app.get('/rowcrew/stats', async (req, res) => {
   try { res.json(await getRowCrewStats()); }
+  catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// ============ FABSTATS ============
+
+app.get('/fabstats/community', async (req, res) => {
+  try { res.json(await getFabStatsCommunity()); }
+  catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.get('/fabstats/leaderboard', async (req, res) => {
+  try { res.json(await getFabStatsLeaderboard(req.query.sort, req.query.limit)); }
+  catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.get('/fabstats/minigame/:game', async (req, res) => {
+  try { res.json(await getFabStatsMinigame(req.params.game)); }
   catch (error) { res.status(500).json({ error: error.message }); }
 });
 
