@@ -8,7 +8,7 @@ import { globalLimiter, writeLimiter } from './middleware/rateLimit.js';
 import {
   getUserProfile, getBodyStats, getStreak, getConsistency,
   getTrainingVolume, getTopExercises, getPRHistory, getRecentWorkouts,
-  getCoachSummary, getAthleteProgress, getMaxLifts, getGoals,
+  getCoachSummary, getAthleteProgress, getMaxLifts, getGoals, getGlobalStats,
 } from './domains/benchpressonly/tools.js';
 import {
   getRecentActivity, getCostSummary, getActivityStats, logActivity,
@@ -16,7 +16,7 @@ import {
 import {
   getStatus as getSpellBrigadeStatus, getLeaderboard,
 } from './domains/spellbrigade/tools.js';
-import { getHealth as getOWTHealth } from './domains/oldwaystoday/tools.js';
+import { getHealth as getOWTHealth, getStats as getOWTStats } from './domains/oldwaystoday/tools.js';
 import {
   getStatus as getMoltbookStatus, getActivity as getMoltbookActivity,
   getConfig as getMoltbookConfig, getFeed as getMoltbookFeed,
@@ -70,6 +70,7 @@ const TOOLS = {
     description: 'Fitness tracking and coaching analytics',
     tools: [
       { name: 'get_user_profile', method: 'GET', endpoint: '/benchpressonly/profile/:username', description: 'User profile and basic stats', params: ['username'] },
+      { name: 'get_global_stats', method: 'GET', endpoint: '/benchpressonly/stats', description: 'Global app stats (users + workouts logged)' },
       { name: 'get_body_stats', method: 'GET', endpoint: '/benchpressonly/body/:username', description: 'Body stats (weight, height, BMI)', params: ['username'] },
       { name: 'get_streak', method: 'GET', endpoint: '/benchpressonly/streak/:username', description: 'Current and longest workout streak', params: ['username'] },
       { name: 'get_consistency', method: 'GET', endpoint: '/benchpressonly/consistency/:username', description: 'Training consistency stats', params: ['username'], query: ['days'] },
@@ -106,6 +107,7 @@ const TOOLS = {
     description: 'Cultural heritage recipe platform',
     tools: [
       { name: 'get_health', method: 'GET', endpoint: '/oldwaystoday/health', description: 'Backend health check with reachability fallback' },
+      { name: 'get_stats', method: 'GET', endpoint: '/oldwaystoday/stats', description: 'Backend request/token usage stats' },
     ]
   },
   moltbook: {
@@ -301,6 +303,11 @@ app.get('/benchpressonly/profile/:username', async (req, res) => {
   catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+app.get('/benchpressonly/stats', async (req, res) => {
+  try { res.json(await getGlobalStats()); }
+  catch (error) { res.status(500).json({ error: error.message }); }
+});
+
 app.get('/benchpressonly/body/:username', async (req, res) => {
   try { res.json(await getBodyStats(req.params.username)); }
   catch (error) { res.status(500).json({ error: error.message }); }
@@ -394,6 +401,11 @@ app.get('/spellbrigade/leaderboard', async (req, res) => {
 
 app.get('/oldwaystoday/health', async (req, res) => {
   try { res.json(await getOWTHealth()); }
+  catch (error) { res.status(502).json({ error: error.message }); }
+});
+
+app.get('/oldwaystoday/stats', async (req, res) => {
+  try { res.json(await getOWTStats()); }
   catch (error) { res.status(502).json({ error: error.message }); }
 });
 

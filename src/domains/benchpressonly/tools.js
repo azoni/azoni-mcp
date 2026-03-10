@@ -12,6 +12,17 @@ async function findUser(username) {
   return { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
 }
 
+async function countQuery(queryRef) {
+  // Prefer server-side count when available, fallback to full snapshot size.
+  try {
+    const countSnap = await queryRef.count().get();
+    return countSnap.data().count || 0;
+  } catch {
+    const snapshot = await queryRef.get();
+    return snapshot.size;
+  }
+}
+
 // ============ PROFILE & STATS ============
 
 export async function getUserProfile(username) {
@@ -614,6 +625,27 @@ export async function getGoals(username, includeCompleted = false) {
     user: user.displayName,
     activeGoals: goals.filter(g => g.status === 'active').length,
     goals,
+  };
+}
+
+export async function getGlobalStats() {
+  const db = getDb();
+
+  const [totalUsers, completedPersonal, completedGroup] = await Promise.all([
+    countQuery(db.collection('users')),
+    countQuery(db.collection('workouts').where('status', '==', 'completed')),
+    countQuery(db.collection('groupWorkouts').where('status', '==', 'completed')),
+  ]);
+
+  return {
+    status: 'ok',
+    totals: {
+      users: totalUsers,
+      workoutsLogged: completedPersonal + completedGroup,
+      personalWorkouts: completedPersonal,
+      groupWorkouts: completedGroup,
+    },
+    updatedAt: new Date().toISOString(),
   };
 }
 
