@@ -112,6 +112,43 @@ export async function getCostSummary(days = 30) {
 
 // ============ LOG ACTIVITY (WRITE) ============
 
+// Portfolio workspace Firestore — the azoni-website reads from this project.
+// MCP's own FIREBASE_SERVICE_ACCOUNT may point to a different project,
+// so we mirror activity events here via REST API to ensure they appear
+// on the Agent Workspace dashboard.
+const PORTFOLIO_FIRESTORE_URL =
+  'https://firestore.googleapis.com/v1/projects/azoni-ai-7abdd' +
+  '/databases/(default)/documents/agent_activity';
+
+async function mirrorToPortfolio(doc) {
+  try {
+    const fields = {
+      type: { stringValue: doc.type },
+      title: { stringValue: doc.title },
+      source: { stringValue: doc.source },
+      description: { stringValue: doc.description || '' },
+      timestamp: { timestampValue: new Date().toISOString() },
+    };
+    if (doc.model) fields.model = { stringValue: doc.model };
+    if (doc.tokens) {
+      const tf = {};
+      if (doc.tokens.prompt != null) tf.prompt = { integerValue: String(doc.tokens.prompt) };
+      if (doc.tokens.completion != null) tf.completion = { integerValue: String(doc.tokens.completion) };
+      if (doc.tokens.total != null) tf.total = { integerValue: String(doc.tokens.total) };
+      fields.tokens = { mapValue: { fields: tf } };
+    }
+    if (doc.cost != null) fields.cost = { doubleValue: doc.cost };
+
+    await fetch(PORTFOLIO_FIRESTORE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fields }),
+    });
+  } catch {
+    // Fire-and-forget — never block the main write
+  }
+}
+
 export async function logActivity({ type, title, description, source, model, tokens, cost }) {
   if (!type || !title || !source) {
     throw new Error('Missing required fields: type, title, source');
@@ -130,6 +167,10 @@ export async function logActivity({ type, title, description, source, model, tok
   };
 
   const ref = await db.collection('agent_activity').add(doc);
+
+  // Mirror to portfolio workspace Firestore (fire-and-forget)
+  mirrorToPortfolio({ type, title, source, description: doc.description, model: doc.model, tokens: doc.tokens, cost: doc.cost });
+
   return { id: ref.id, ...doc, timestamp: new Date().toISOString() };
 }
 
