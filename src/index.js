@@ -381,9 +381,59 @@ app.get('/activity/stats', async (req, res) => {
 });
 
 app.post('/activity/log', async (req, res) => {
-  try { res.json(await logActivity(req.body)); }
+  try {
+    const result = await logActivity(req.body);
+    res.json(result);
+
+    // Fire-and-forget event routing
+    routeEvent(req.body).catch(err => console.log('[event-router] Route failed:', err.message));
+  }
   catch (error) { res.status(400).json({ error: error.message }); }
 });
+
+// ─── Event router: downstream triggers after activity is logged ───
+async function routeEvent(activity) {
+  const { type, title, source, description, metadata } = activity;
+  const tasks = [];
+
+  // blog_published → trigger Moltbook social share
+  if (type === 'blog_published') {
+    const moltbookUrl = process.env.MOLTBOOK_AGENT_URL || 'https://azoni-moltbook-agent.onrender.com';
+    const adminKey = process.env.MOLTBOOK_ADMIN_KEY;
+    if (adminKey) {
+      tasks.push(
+        fetch(`${moltbookUrl}/run`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Admin-Key': adminKey },
+          body: JSON.stringify({
+            message: `New blog post published: "${title}". Share it on Moltbook with a brief intro.`,
+            context: { action: 'share_blog', blogTitle: title },
+            source: 'event-router',
+          }),
+          signal: AbortSignal.timeout(5000),
+        }).catch(err => console.log('[event-router] Social share failed:', err.message))
+      );
+    }
+  }
+
+  // critical errors → trigger reactive orchestrator
+  if (type === 'error_logged' && metadata?.severity === 'critical') {
+    const orchestratorUrl = process.env.ORCHESTRATOR_URL || 'https://azoni.ai/.netlify/functions/azoni-orchestrator';
+    tasks.push(
+      fetch(orchestratorUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reactive: true, event: { type, title, source, description, metadata } }),
+        signal: AbortSignal.timeout(5000),
+      }).catch(err => console.log('[event-router] Reactive orchestrator failed:', err.message))
+    );
+  }
+
+  if (tasks.length > 0) {
+    await Promise.allSettled(tasks);
+    console.log(`[event-router] Routed ${type} → ${tasks.length} task(s)`);
+  }
+}
 
 // ============ SPELL BRIGADE ============
 

@@ -12,7 +12,7 @@ export const globalLimiter = rateLimit({
 // Write rate limit: 10 requests per minute per IP (POST/PATCH/DELETE)
 export const writeLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 10,
+  max: 60,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many write requests, please try again later' },
