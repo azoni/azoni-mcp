@@ -113,36 +113,28 @@ export async function getCostSummary(days = 30) {
 // ============ LOG ACTIVITY (WRITE) ============
 
 // Portfolio workspace Firestore — the azoni-website reads from this project.
-// MCP's own FIREBASE_SERVICE_ACCOUNT may point to a different project,
-// so we mirror activity events here via REST API to ensure they appear
-// on the Agent Workspace dashboard.
-const PORTFOLIO_FIRESTORE_URL =
-  'https://firestore.googleapis.com/v1/projects/azoni-ai-7abdd' +
-  '/databases/(default)/documents/agent_activity';
+// Mirror events to the portfolio site's Netlify function so they appear
+// on the Agent Workspace dashboard (portfolio uses a different Firebase project).
+const PORTFOLIO_LOG_URL = 'https://azoni.netlify.app/.netlify/functions/log-agent-activity';
 
 async function mirrorToPortfolio(doc) {
   try {
-    const fields = {
-      type: { stringValue: doc.type },
-      title: { stringValue: doc.title },
-      source: { stringValue: doc.source },
-      description: { stringValue: doc.description || '' },
-      timestamp: { timestampValue: new Date().toISOString() },
-    };
-    if (doc.model) fields.model = { stringValue: doc.model };
-    if (doc.tokens) {
-      const tf = {};
-      if (doc.tokens.prompt != null) tf.prompt = { integerValue: String(doc.tokens.prompt) };
-      if (doc.tokens.completion != null) tf.completion = { integerValue: String(doc.tokens.completion) };
-      if (doc.tokens.total != null) tf.total = { integerValue: String(doc.tokens.total) };
-      fields.tokens = { mapValue: { fields: tf } };
-    }
-    if (doc.cost != null) fields.cost = { doubleValue: doc.cost };
+    const secret = process.env.AGENT_WEBHOOK_SECRET;
+    if (!secret) return;
 
-    await fetch(PORTFOLIO_FIRESTORE_URL, {
+    await fetch(PORTFOLIO_LOG_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fields }),
+      body: JSON.stringify({
+        type: doc.type,
+        title: doc.title,
+        source: doc.source,
+        description: doc.description || '',
+        model: doc.model || undefined,
+        tokens: doc.tokens || undefined,
+        cost: doc.cost ?? undefined,
+        secret,
+      }),
     });
   } catch {
     // Fire-and-forget — never block the main write
