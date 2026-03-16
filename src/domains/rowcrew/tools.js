@@ -342,12 +342,22 @@ async function fetchCollectionViaRest(collectionName, maxDocs = REST_SCAN_LIMIT)
 async function getStatsFromRowCrewFallback() {
   if (!canUseRestFallback()) return null;
 
-  const { docs, truncated } = await fetchCollectionViaRest(ROWCREW_FALLBACK_COLLECTION, REST_SCAN_LIMIT);
+  const [entriesResult, usersResult] = await Promise.all([
+    fetchCollectionViaRest(ROWCREW_FALLBACK_COLLECTION, REST_SCAN_LIMIT),
+    fetchCollectionViaRest('users', REST_SCAN_LIMIT).catch(() => ({ docs: [], truncated: false })),
+  ]);
+  const { docs, truncated } = entriesResult;
   if (!docs.length) return null;
 
   const rows = docs.map((document) => decodeFirestoreDocument(document));
   const totals = summarizeRowDocs(rows, SCAN_LIMIT);
   totals.truncated = totals.truncated || truncated;
+
+  // Use registered user count if higher than unique rowers from entries
+  const registeredUsers = usersResult.docs.length;
+  if (registeredUsers > totals.uniqueRowers) {
+    totals.uniqueRowers = registeredUsers;
+  }
 
   const recentSessions = rows
     .map((row) => normalizeSession(row.id || null, row))
@@ -371,10 +381,16 @@ export async function getStats() {
 
     if (found) {
       const { name: collectionName, ref, count: totalSessions } = found;
-      const [totals, recentSessions] = await Promise.all([
+      const [totals, recentSessions, registeredUsers] = await Promise.all([
         sumRowMetricsFromCollection(ref),
         getRecentSessionsFromCollection(ref),
+        countQuery(db.collection('users')).catch(() => 0),
       ]);
+
+      // Use registered user count if higher than unique rowers from entries
+      if (registeredUsers > totals.uniqueRowers) {
+        totals.uniqueRowers = registeredUsers;
+      }
 
       return buildStatsResponse({
         collection: collectionName,
