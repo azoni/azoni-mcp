@@ -537,6 +537,19 @@ app.get('/fabstats/community', async (req, res) => {
   catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+// Alias so app-stats.js can call /fabstats/stats
+app.get('/fabstats/stats', async (req, res) => {
+  try {
+    const community = await getFabStatsCommunity();
+    res.json({
+      totals: {
+        users: community.totalPlayers,
+        matches: community.totalMatches,
+      },
+    });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
 app.get('/fabstats/leaderboard', async (req, res) => {
   try { res.json(await getFabStatsLeaderboard(req.query.sort, req.query.limit)); }
   catch (error) { res.status(500).json({ error: error.message }); }
