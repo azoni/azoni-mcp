@@ -32,6 +32,10 @@ import {
   getLeaderboard as getFabStatsLeaderboard,
   getMinigameStats as getFabStatsMinigame,
 } from './domains/fabstats/tools.js';
+import {
+  getStats as getLaunchpadStats,
+  logView as logLaunchpadView,
+} from './domains/launchpad/tools.js';
 
 initializeFirebase();
 
@@ -52,6 +56,10 @@ app.use(cors({
       return callback(null, true);
     }
     if (ALLOWED_ORIGINS.includes(origin)) {
+      return callback(null, true);
+    }
+    // Allow all netlify.app subdomains (launchpad apps)
+    if (origin.endsWith('.netlify.app')) {
       return callback(null, true);
     }
     callback(new Error('Not allowed by CORS'));
@@ -148,6 +156,14 @@ const TOOLS = {
       { name: 'get_community_stats', method: 'GET', endpoint: '/fabstats/community', description: 'Community overview — players, matches, top heroes, win rate' },
       { name: 'get_leaderboard', method: 'GET', endpoint: '/fabstats/leaderboard', description: 'Top players by matches, win rate, or ELO', query: ['sort', 'limit'] },
       { name: 'get_minigame_stats', method: 'GET', endpoint: '/fabstats/minigame/:game', description: 'Top players for a specific daily minigame', params: ['game'] },
+    ]
+  },
+  launchpad: {
+    name: 'Launchpad',
+    description: 'Web app factory — tracks views and activity across all launched apps',
+    tools: [
+      { name: 'get_stats', method: 'GET', endpoint: '/launchpad/stats', description: 'View counts for all launchpad apps (24h and total)' },
+      { name: 'log_view', method: 'POST', endpoint: '/launchpad/view', description: 'Log a page view from a launchpad app', body: ['app', 'page'] },
     ]
   },
 };
@@ -558,6 +574,18 @@ app.get('/fabstats/leaderboard', async (req, res) => {
 app.get('/fabstats/minigame/:game', async (req, res) => {
   try { res.json(await getFabStatsMinigame(req.params.game)); }
   catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// ============ LAUNCHPAD ============
+
+app.get('/launchpad/stats', async (req, res) => {
+  try { res.json(await getLaunchpadStats()); }
+  catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.post('/launchpad/view', async (req, res) => {
+  try { res.json(await logLaunchpadView(req.body)); }
+  catch (error) { res.status(400).json({ error: error.message }); }
 });
 
 // ============ START ============
