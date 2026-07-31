@@ -45,3 +45,7 @@ export function getFabStatsDb() {
 export function serverTimestamp() {
   return FieldValue.serverTimestamp();
 }
+
+export function increment(n) {
+  return FieldValue.increment(n);
+}

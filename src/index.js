@@ -1,6 +1,6 @@
 import express from 'express';
 import cors from 'cors';
-import { initializeFirebase } from './firebase.js';
+import { initializeFirebase, getDb, increment, serverTimestamp } from './firebase.js';
 import { authMiddleware } from './middleware/auth.js';
 import { globalLimiter, writeLimiter } from './middleware/rateLimit.js';
 
@@ -168,6 +168,42 @@ const TOOLS = {
   },
 };
 
+// ── Tool-call tracking ──────────────────────────────────────────────────────
+// Tool names collide across domains (get_status, get_stats, get_leaderboard),
+// so counters are keyed by `${domain}__${name}`. Every successful tool response
+// bumps a Firestore counter (fire-and-forget); /tools joins the counts back in.
+const toolKey = (domain, name) => `${domain}__${name}`;
+
+const ENDPOINT_TO_TOOL = {};
+for (const [domainKey, domain] of Object.entries(TOOLS)) {
+  for (const t of domain.tools) {
+    ENDPOINT_TO_TOOL[`${t.method || 'GET'} ${t.endpoint}`] = toolKey(domainKey, t.name);
+  }
+}
+
+async function trackToolCall(key) {
+  try {
+    await getDb().collection('mcp_stats').doc('tool_calls').set({
+      total: increment(1),
+      counts: { [key]: increment(1) },
+      updatedAt: serverTimestamp(),
+    }, { merge: true });
+  } catch (err) {
+    console.error('[mcp] trackToolCall failed:', err.message);
+  }
+}
+
+// Count successful tool calls after the response is sent, so tracking never
+// blocks or breaks a tool call.
+app.use((req, res, next) => {
+  res.on('finish', () => {
+    if (res.statusCode < 200 || res.statusCode >= 300 || !req.route) return;
+    const key = ENDPOINT_TO_TOOL[`${req.method} ${req.route.path}`];
+    if (key) trackToolCall(key);
+  });
+  next();
+});
+
 // Landing page HTML
 function buildLandingPage() {
   const domainCards = Object.entries(TOOLS).map(([key, domain]) => {
@@ -295,7 +331,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-app.get('/tools', (req, res) => {
+app.get('/tools', async (req, res) => {
   const tools = [];
   Object.entries(TOOLS).forEach(([domain, data]) => {
     data.tools.forEach(tool => {
@@ -303,12 +339,32 @@ app.get('/tools', (req, res) => {
     });
   });
 
+  // Best-effort join of per-tool call counts.
+  let counts = {};
+  let totalCalls = 0;
+  let callsUpdatedAt = null;
+  try {
+    const snap = await getDb().collection('mcp_stats').doc('tool_calls').get();
+    if (snap.exists) {
+      const d = snap.data() || {};
+      counts = d.counts || {};
+      totalCalls = d.total || 0;
+      callsUpdatedAt = d.updatedAt?.toDate?.().toISOString() || null;
+    }
+  } catch (err) {
+    console.error('[mcp] /tools counts read failed:', err.message);
+  }
+
+  const withCalls = tools.map((t) => ({ ...t, calls: counts[toolKey(t.domain, t.name)] || 0 }));
+
   res.json({
     name: 'azoni-mcp',
     version: '2.0.0',
     domains: Object.keys(TOOLS),
     totalTools: tools.length,
-    tools,
+    totalCalls,
+    callsUpdatedAt,
+    tools: withCalls,
   });
 });
 
