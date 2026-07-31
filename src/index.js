@@ -193,6 +193,20 @@ async function trackToolCall(key) {
   }
 }
 
+// Stamp the tracking start date once (never overwritten by trackToolCall), so
+// the UI can honestly show "counts since <date>".
+(async () => {
+  try {
+    const ref = getDb().collection('mcp_stats').doc('tool_calls');
+    const snap = await ref.get();
+    if (!snap.exists || !snap.data()?.startedAt) {
+      await ref.set({ startedAt: serverTimestamp() }, { merge: true });
+    }
+  } catch (err) {
+    console.error('[mcp] startedAt stamp failed:', err.message);
+  }
+})();
+
 // Count successful tool calls after the response is sent, so tracking never
 // blocks or breaks a tool call.
 app.use((req, res, next) => {
@@ -343,6 +357,7 @@ app.get('/tools', async (req, res) => {
   let counts = {};
   let totalCalls = 0;
   let callsUpdatedAt = null;
+  let since = null;
   try {
     const snap = await getDb().collection('mcp_stats').doc('tool_calls').get();
     if (snap.exists) {
@@ -350,6 +365,7 @@ app.get('/tools', async (req, res) => {
       counts = d.counts || {};
       totalCalls = d.total || 0;
       callsUpdatedAt = d.updatedAt?.toDate?.().toISOString() || null;
+      since = d.startedAt?.toDate?.().toISOString() || null;
     }
   } catch (err) {
     console.error('[mcp] /tools counts read failed:', err.message);
@@ -364,6 +380,7 @@ app.get('/tools', async (req, res) => {
     totalTools: tools.length,
     totalCalls,
     callsUpdatedAt,
+    since,
     tools: withCalls,
   });
 });
